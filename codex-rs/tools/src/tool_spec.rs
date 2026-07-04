@@ -9,6 +9,7 @@ use codex_protocol::config_types::WebSearchUserLocation as ConfigWebSearchUserLo
 use codex_protocol::config_types::WebSearchUserLocationType;
 use serde::Serialize;
 use serde_json::Value;
+use serde_json::json;
 
 /// When serialized as JSON, this produces a valid "Tool" in the OpenAI
 /// Responses API.
@@ -85,6 +86,42 @@ pub fn create_tools_json_for_responses_api(
     for tool in tools {
         let json = serde_json::to_value(tool)?;
         tools_json.push(json);
+    }
+
+    Ok(tools_json)
+}
+
+/// Converts tool specs to the Chat Completions API format.
+///
+/// Chat Completions wraps each function tool in an extra `"function"` nesting:
+/// `{"type": "function", "function": {"name": ..., "description": ..., "parameters": ...}}`
+///
+/// Non-function tools (namespace, web_search, etc.) are skipped as they are
+/// Responses-API-specific.
+pub fn create_tools_json_for_chat_completions_api(
+    tools: &[ToolSpec],
+) -> Result<Vec<Value>, serde_json::Error> {
+    let mut tools_json = Vec::new();
+
+    for tool in tools {
+        match tool {
+            ToolSpec::Function(func) => {
+                tools_json.push(json!({
+                    "type": "function",
+                    "function": {
+                        "name": func.name,
+                        "description": func.description,
+                        "parameters": serde_json::to_value(&func.parameters)?,
+                    }
+                }));
+            }
+            // Skip Responses-API-specific tool types
+            ToolSpec::Namespace { .. }
+            | ToolSpec::ToolSearch { .. }
+            | ToolSpec::ImageGeneration { .. }
+            | ToolSpec::WebSearch { .. }
+            | ToolSpec::Freeform(_) => {}
+        }
     }
 
     Ok(tools_json)

@@ -84,6 +84,7 @@ use codex_protocol::protocol::W3cTraceContext;
 use codex_rollout_trace::CompactionTraceContext;
 use codex_rollout_trace::InferenceTraceAttempt;
 use codex_rollout_trace::InferenceTraceContext;
+use codex_tools::create_tools_json_for_chat_completions_api;
 use codex_tools::create_tools_json_for_responses_api;
 use eventsource_stream::Event;
 use eventsource_stream::EventStreamError;
@@ -1780,6 +1781,94 @@ impl ModelClientSession {
                     inference_trace,
                 )
                 .await
+            }
+            WireApi::Chat => {
+                self.stream_chat_completions(prompt, model_info, session_telemetry, inference_trace)
+                    .await
+            }
+        }
+    }
+
+    /// Streams a turn via the Chat Completions API (`/v1/chat/completions`).
+    ///
+    /// This is a simpler path than the Responses API — no reasoning summaries,
+    /// no WebSocket transport, no structured output controls.
+    #[allow(clippy::too_many_arguments)]
+    #[instrument(
+        name = "model_client.stream_chat_completions",
+        level = "info",
+        skip_all,
+        fields(
+            model = %model_info.slug,
+            wire_api = "chat",
+            transport = "chat_http",
+            http.method = "POST",
+            api.path = "chat/completions"
+        )
+    )]
+    async fn stream_chat_completions(
+        &self,
+        prompt: &Prompt,
+        model_info: &ModelInfo,
+        session_telemetry: &SessionTelemetry,
+        inference_trace: &InferenceTraceContext,
+    ) -> Result<ResponseStream> {
+        let client_setup = self.client.current_client_setup().await?;
+        let transport = ReqwestTransport::new(build_reqwest_client());
+        let request_auth_context = AuthRequestTelemetryContext::new(
+            client_setup.auth.as_ref().map(CodexAuth::auth_mode),
+            client_setup.api_auth.as_ref(),
+            client_setup.agent_identity_telemetry.clone(),
+            PendingUnauthorizedRetry::default(),
+        );
+        let (request_telemetry, sse_telemetry) = Self::build_streaming_telemetry(
+            session_telemetry,
+            request_auth_context,
+            RequestRouteTelemetry::for_endpoint("chat/completions"),
+            self.client.state.auth_env_telemetry.clone(),
+        );
+
+        let tools = create_tools_json_for_chat_completions_api(&prompt.tools).map_err(|e| {
+            self.client
+                .state
+                .provider
+                .map_api_error(ApiError::Stream(format!(
+                    "failed to serialize tools for chat API: {e}"
+                )))
+        })?;
+
+        let chat_request = codex_api::ChatRequestBuilder::new(
+            &model_info.slug,
+            &prompt.base_instructions.text,
+            &prompt.input,
+            &tools,
+        )
+        .session_id(Some(self.client.state.thread_id.to_string()))
+        .thread_id(Some(self.client.state.thread_id.to_string()))
+        .session_source(Some(self.client.state.session_source.clone()))
+        .build(&client_setup.api_provider)
+        .map_err(|e| self.client.state.provider.map_api_error(e))?;
+
+        let client =
+            codex_api::ChatClient::new(transport, client_setup.api_provider, client_setup.api_auth)
+                .with_telemetry(Some(request_telemetry), Some(sse_telemetry));
+
+        let stream_result = client.stream_request(chat_request, None).await;
+
+        match stream_result {
+            Ok(stream) => {
+                let inference_trace_attempt = inference_trace.start_attempt();
+                let (stream, _) = map_response_stream(
+                    stream,
+                    session_telemetry.clone(),
+                    inference_trace_attempt,
+                    Arc::clone(&self.client.state.provider),
+                );
+                Ok(stream)
+            }
+            Err(err) => {
+                let err = self.client.state.provider.map_api_error(err);
+                Err(err)
             }
         }
     }
