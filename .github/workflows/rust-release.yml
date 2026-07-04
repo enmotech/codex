@@ -72,6 +72,7 @@ jobs:
 
       - name: Set version from tag
         shell: bash
+        working-directory: .
         run: |
           set -euo pipefail
           version="${GITHUB_REF_NAME#rust-v}"
