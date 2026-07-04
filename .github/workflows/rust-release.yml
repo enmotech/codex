@@ -76,6 +76,12 @@ jobs:
           set -euo pipefail
           cargo build --target x86_64-unknown-linux-musl --release --bin codex
 
+      - name: Strip binary
+        shell: bash
+        run: |
+          set -euo pipefail
+          strip --strip-debug --strip-unneeded "target/x86_64-unknown-linux-musl/release/codex"
+
       - name: Stage artifacts
         shell: bash
         run: |
