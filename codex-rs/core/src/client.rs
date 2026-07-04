@@ -1783,13 +1783,8 @@ impl ModelClientSession {
                 .await
             }
             WireApi::Chat => {
-                self.stream_chat_completions(
-                    prompt,
-                    model_info,
-                    session_telemetry,
-                    inference_trace,
-                )
-                .await
+                self.stream_chat_completions(prompt, model_info, session_telemetry, inference_trace)
+                    .await
             }
         }
     }
@@ -1833,16 +1828,14 @@ impl ModelClientSession {
             self.client.state.auth_env_telemetry.clone(),
         );
 
-        let tools = create_tools_json_for_chat_completions_api(&prompt.tools).map_err(
-            |e| {
-                self.client
-                    .state
-                    .provider
-                    .map_api_error(ApiError::Stream(format!(
-                        "failed to serialize tools for chat API: {e}"
-                    )))
-            },
-        )?;
+        let tools = create_tools_json_for_chat_completions_api(&prompt.tools).map_err(|e| {
+            self.client
+                .state
+                .provider
+                .map_api_error(ApiError::Stream(format!(
+                    "failed to serialize tools for chat API: {e}"
+                )))
+        })?;
 
         let chat_request = codex_api::ChatRequestBuilder::new(
             &model_info.slug,
@@ -1856,16 +1849,11 @@ impl ModelClientSession {
         .build(&client_setup.api_provider)
         .map_err(|e| self.client.state.provider.map_api_error(e))?;
 
-        let client = codex_api::ChatClient::new(
-            transport,
-            client_setup.api_provider,
-            client_setup.api_auth,
-        )
-        .with_telemetry(Some(request_telemetry), Some(sse_telemetry));
+        let client =
+            codex_api::ChatClient::new(transport, client_setup.api_provider, client_setup.api_auth)
+                .with_telemetry(Some(request_telemetry), Some(sse_telemetry));
 
-        let stream_result = client
-            .stream_request(chat_request, None)
-            .await;
+        let stream_result = client.stream_request(chat_request, None).await;
 
         match stream_result {
             Ok(stream) => {
@@ -1880,7 +1868,7 @@ impl ModelClientSession {
             }
             Err(err) => {
                 let err = self.client.state.provider.map_api_error(err);
-                Err(err.into())
+                Err(err)
             }
         }
     }
